@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  ADVERTISER
+}
+
+enum AdStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum Position {
+  TOP
+  MID
+  BOTTOM
+}
+
+enum AdSize {
+  BANNER
+  GRID
+}
+
+enum SlotStatus {
+  SCHEDULED
+  SERVED
+  CANCELLED
+}
+
+enum EventType {
+  IMPRESSION
+  CLICK
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  ads          Ad[]
+  orders       Order[]
+
+  @@map("users")
+}
+
+model AdSpace {
+  id          String   @id @default(uuid())
+  pageNumber  Int      @map("page_number")
+  position    Position
+  size        AdSize
+  year        Int
+  basePrice   Decimal  @db.Decimal(10, 2) @map("base_price")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  pricingRules PricingRule[]
+  inventories  SpaceDailyInventory[]
+  orders       Order[]
+  slots        ScheduledSlot[]
+  events       AdEvent[]
+
+  @@unique([pageNumber, position, size, year])
+  @@index([pageNumber, year])
+  @@map("ad_spaces")
+}
+
+model PricingRule {
+  id         String   @id @default(uuid())
+  adSpaceId  String   @map("ad_space_id")
+  startDate  DateTime @db.Date @map("start_date")
+  endDate    DateTime @db.Date @map("end_date")
+  price      Decimal  @db.Decimal(10, 2)
+  priority   Int
+  color      String
+  details    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  adSpace AdSpace @relation(fields: [adSpaceId], references: [id], onDelete: Cascade)
+
+  @@index([adSpaceId, startDate, endDate])
+  @@index([adSpaceId, priority])
+  @@map("pricing_rules")
+}
+
+model Ad {
+  id           String    @id @default(uuid())
+  advertiserId String    @map("advertiser_id")
+  title        String
+  description  String
+  imageUrl     String?   @map("image_url")
+  targetUrl    String    @map("target_url")
+  status       AdStatus  @default(PENDING)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  advertiser User @relation(fields: [advertiserId], references: [id], onDelete: Cascade)
+
+  orders Order[]
+  events AdEvent[]
+
+  @@index([advertiserId, status])
+  @@map("ads")
+}
+
+model Order {
+  id              String        @id @default(uuid())
+  advertiserId    String        @map("advertiser_id")
+  adId            String        @map("ad_id")
+  adSpaceId       String        @map("ad_space_id")
+  date            DateTime      @db.Date
+  durationSeconds Int           @map("duration_seconds")
+  pricePerHour    Decimal       @db.Decimal(10, 2) @map("price_per_hour")
+  totalPrice      Decimal       @db.Decimal(10, 2) @map("total_price")
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(PENDING) @map("payment_status")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  advertiser User   @relation(fields: [advertiserId], references: [id])
+  ad         Ad     @relation(fields: [adId], references: [id])
+  adSpace    AdSpace @relation(fields: [adSpaceId], references: [id])
+
+  scheduledSlots ScheduledSlot[]
+  events         AdEvent[]
+
+  @@index([adSpaceId, date])
+  @@index([advertiserId, createdAt])
+  @@map("orders")
+}
+
+model SpaceDailyInventory {
+  id            String   @id @default(uuid())
+  adSpaceId     String   @map("ad_space_id")
+  date          DateTime @db.Date
+  totalSeconds  Int      @default(86400) @map("total_seconds")
+  bookedSeconds Int      @default(0) @map("booked_seconds")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  adSpace AdSpace @relation(fields: [adSpaceId], references: [id], onDelete: Cascade)
+
+  @@unique([adSpaceId, date])
+  @@map("space_daily_inventory")
+}
+
+model ScheduledSlot {
+  id              String     @id @default(uuid())
+  orderId         String     @map("order_id")
+  adSpaceId       String     @map("ad_space_id")
+  startAt         DateTime   @map("start_at")
+  endAt           DateTime   @map("end_at")
+  durationSeconds Int        @map("duration_seconds")
+  status          SlotStatus @default(SCHEDULED)
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  adSpace AdSpace @relation(fields: [adSpaceId], references: [id], onDelete: Cascade)
+
+  @@index([adSpaceId, startAt, endAt])
+  @@index([orderId])
+  @@map("scheduled_slots")
+}
+
+model AdEvent {
+  id         String    @id @default(uuid())
+  adId       String    @map("ad_id")
+  orderId    String    @map("order_id")
+  adSpaceId  String    @map("ad_space_id")
+  eventType  EventType @map("event_type")
+  startedAt  DateTime? @map("started_at")
+  endedAt    DateTime? @map("ended_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  ad       Ad      @relation(fields: [adId], references: [id], onDelete: Cascade)
+  order    Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  adSpace  AdSpace @relation(fields: [adSpaceId], references: [id], onDelete: Cascade)
+
+  @@index([adId, createdAt])
+  @@index([orderId, createdAt])
+  @@map("ad_events")
+}
