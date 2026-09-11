@@ -15,19 +15,7 @@ const generateSchedule = async (orderId, tx = prisma) => {
     throw error;
   }
 
-  const existingSlots = await tx.scheduledSlot.findMany({
-    where: {
-      orderId,
-      status: {
-        in: ["SCHEDULED", "SERVED"],
-      },
-    },
-  });
-
-  // Make scheduler safe to run multiple times
-  if (existingSlots.length > 0) {
-    return existingSlots;
-  }
+  const now = new Date();
 
   const dayStart = new Date(order.date);
   dayStart.setUTCHours(0, 0, 0, 0);
@@ -35,33 +23,74 @@ const generateSchedule = async (orderId, tx = prisma) => {
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
 
-  // Get all orders for this placement/date
+  const isToday =
+    order.date.toISOString().slice(0, 10) ===
+    now.toISOString().slice(0, 10);
+
+  const cursorStart = isToday ? now : dayStart;
+
+  // Get all confirmed + paid orders for this ad space
   const orders = await tx.order.findMany({
     where: {
       adSpaceId: order.adSpaceId,
       date: order.date,
-      status: {
-        in: ["PENDING", "CONFIRMED"],
-      },
+      status: "CONFIRMED",
+      paymentStatus: "PAID",
     },
     orderBy: {
       createdAt: "asc",
     },
   });
 
-  /*
-   * Build the rotation queue.
-   *
-   * Each order gets broken into 2-minute windows.
-   */
-  const queues = orders.map((currentOrder) => ({
-    order: currentOrder,
-    remaining: currentOrder.durationSeconds,
-  }));
+  // Get existing slots for this ad space
+  const existingSlots = await tx.scheduledSlot.findMany({
+    where: {
+      adSpaceId: order.adSpaceId,
+      startAt: {
+        lt: cursorStart,
+      },
+    },
+  });
+
+  // Calculate how much time each order has already consumed
+  const consumed = {};
+
+  for (const slot of existingSlots) {
+    if (!consumed[slot.orderId]) {
+      consumed[slot.orderId] = 0;
+    }
+
+    consumed[slot.orderId] += slot.durationSeconds;
+  }
+
+  // Delete future schedules for this ad space
+  await tx.scheduledSlot.deleteMany({
+    where: {
+      adSpaceId: order.adSpaceId,
+      startAt: {
+        gte: cursorStart,
+      },
+      status: "SCHEDULED",
+    },
+  });
+
+  // Create queues with remaining purchased duration
+  const queues = orders
+    .map((currentOrder) => ({
+      order: currentOrder,
+      remaining:
+        currentOrder.durationSeconds -
+        (consumed[currentOrder.id] || 0),
+    }))
+    .filter((item) => item.remaining > 0);
+
+  if (queues.length === 0) {
+    return [];
+  }
 
   const slots = [];
 
-  let cursor = dayStart;
+  let cursor = cursorStart;
   let queueIndex = 0;
 
   while (
@@ -86,12 +115,14 @@ const generateSchedule = async (orderId, tx = prisma) => {
 
     const current = queues[queueIndex];
 
+    const remainingDaySeconds = Math.floor(
+      (dayEnd.getTime() - cursor.getTime()) / 1000
+    );
+
     const duration = Math.min(
       WINDOW_SECONDS,
       current.remaining,
-      Math.floor(
-        (dayEnd.getTime() - cursor.getTime()) / 1000
-      )
+      remainingDaySeconds
     );
 
     if (duration <= 0) {
@@ -131,7 +162,10 @@ const generateSchedule = async (orderId, tx = prisma) => {
 
   return tx.scheduledSlot.findMany({
     where: {
-      orderId,
+      adSpaceId: order.adSpaceId,
+      startAt: {
+        gte: cursorStart,
+      },
     },
     orderBy: {
       startAt: "asc",

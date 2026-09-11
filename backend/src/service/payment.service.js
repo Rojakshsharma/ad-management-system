@@ -1,5 +1,7 @@
+
 const prisma = require("../config/prisma.js");
 const crypto = require("crypto");
+const { generateSchedule } = require("./scheduler.service.js");
 
 const payOrder = async (advertiserId, orderId) => {
   return prisma.$transaction(async (tx) => {
@@ -30,7 +32,9 @@ const payOrder = async (advertiserId, orderId) => {
     }
 
     if (order.status === "CANCELLED") {
-      const error = new Error("Cancelled order cannot be paid");
+      const error = new Error(
+        "Cancelled order cannot be paid"
+      );
       error.statusCode = 400;
       throw error;
     }
@@ -46,6 +50,8 @@ const payOrder = async (advertiserId, orderId) => {
         status: "CONFIRMED",
       },
     });
+
+    await generateSchedule(orderId, tx);
 
     return {
       order: updatedOrder,

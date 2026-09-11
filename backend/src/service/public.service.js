@@ -71,6 +71,7 @@ const getActiveAd = async ({
 
     slot: {
       id: slot.id,
+      orderId: slot.orderId,
       startAt: slot.startAt,
       endAt: slot.endAt,
       durationSeconds: slot.durationSeconds,
