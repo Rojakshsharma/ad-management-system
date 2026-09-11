@@ -11,8 +11,32 @@ const getAllAdSpaces = async () => {
 };
 
 const createAdSpace = async (data) => {
+  const existingSpace = await prisma.adSpace.findUnique({
+    where: {
+      pageNumber_position_size_year: {
+        pageNumber: Number(data.pageNumber),
+        position: data.position,
+        size: data.size,
+        year: Number(data.year),
+      },
+    },
+  });
+
+  if (existingSpace) {
+    const error = new Error(
+      "Ad space with the same page number, position, size and year already exists"
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
   return prisma.adSpace.create({
-    data,
+    data: {
+      ...data,
+      pageNumber: Number(data.pageNumber),
+      year: Number(data.year),
+      basePrice: Number(data.basePrice),
+    },
   });
 };
 

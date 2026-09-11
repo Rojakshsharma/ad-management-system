@@ -1,5 +1,43 @@
 const prisma = require("../config/prisma");
 
+const validatePricingData = (data) => {
+  const price = Number(data.price);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    const error = new Error(
+      "Pricing rule price must be greater than 0"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const startDate = new Date(data.startDate);
+  const endDate = new Date(data.endDate);
+
+  if (
+    Number.isNaN(startDate.getTime()) ||
+    Number.isNaN(endDate.getTime())
+  ) {
+    const error = new Error("Invalid pricing rule dates");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (startDate > endDate) {
+    const error = new Error(
+      "Start date cannot be after end date"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    price,
+    startDate,
+    endDate,
+  };
+};
+
 const getPricingRules = async (adSpaceId) => {
   return prisma.pricingRule.findMany({
     where: {
@@ -25,13 +63,16 @@ const createPricingRule = async (data) => {
     throw error;
   }
 
-  const startDate = new Date(data.startDate);
-  const endDate = new Date(data.endDate);
+  const { price, startDate, endDate } =
+    validatePricingData(data);
 
   const startYear = startDate.getUTCFullYear();
   const endYear = endDate.getUTCFullYear();
 
-  if (startYear !== adSpace.year || endYear !== adSpace.year) {
+  if (
+    startYear !== adSpace.year ||
+    endYear !== adSpace.year
+  ) {
     const error = new Error(
       `Pricing rule dates must belong to year ${adSpace.year}`
     );
@@ -39,18 +80,19 @@ const createPricingRule = async (data) => {
     throw error;
   }
 
-  const overlappingRule = await prisma.pricingRule.findFirst({
-    where: {
-      adSpaceId: data.adSpaceId,
-      priority: data.priority,
-      startDate: {
-        lte: endDate,
+  const overlappingRule =
+    await prisma.pricingRule.findFirst({
+      where: {
+        adSpaceId: data.adSpaceId,
+        priority: data.priority,
+        startDate: {
+          lte: endDate,
+        },
+        endDate: {
+          gte: startDate,
+        },
       },
-      endDate: {
-        gte: startDate,
-      },
-    },
-  });
+    });
 
   if (overlappingRule) {
     const error = new Error(
@@ -61,7 +103,12 @@ const createPricingRule = async (data) => {
   }
 
   return prisma.pricingRule.create({
-    data,
+    data: {
+      ...data,
+      price,
+      startDate,
+      endDate,
+    },
   });
 };
 
@@ -88,13 +135,16 @@ const updatePricingRule = async (id, data) => {
     throw error;
   }
 
-  const startDate = new Date(data.startDate);
-  const endDate = new Date(data.endDate);
+  const { price, startDate, endDate } =
+    validatePricingData(data);
 
   const startYear = startDate.getUTCFullYear();
   const endYear = endDate.getUTCFullYear();
 
-  if (startYear !== adSpace.year || endYear !== adSpace.year) {
+  if (
+    startYear !== adSpace.year ||
+    endYear !== adSpace.year
+  ) {
     const error = new Error(
       `Pricing rule dates must belong to year ${adSpace.year}`
     );
@@ -102,21 +152,22 @@ const updatePricingRule = async (id, data) => {
     throw error;
   }
 
-  const overlappingRule = await prisma.pricingRule.findFirst({
-    where: {
-      id: {
-        not: id,
+  const overlappingRule =
+    await prisma.pricingRule.findFirst({
+      where: {
+        id: {
+          not: id,
+        },
+        adSpaceId: data.adSpaceId,
+        priority: data.priority,
+        startDate: {
+          lte: endDate,
+        },
+        endDate: {
+          gte: startDate,
+        },
       },
-      adSpaceId: data.adSpaceId,
-      priority: data.priority,
-      startDate: {
-        lte: endDate,
-      },
-      endDate: {
-        gte: startDate,
-      },
-    },
-  });
+    });
 
   if (overlappingRule) {
     const error = new Error(
@@ -128,7 +179,12 @@ const updatePricingRule = async (id, data) => {
 
   return prisma.pricingRule.update({
     where: { id },
-    data,
+    data: {
+      ...data,
+      price,
+      startDate,
+      endDate,
+    },
   });
 };
 
