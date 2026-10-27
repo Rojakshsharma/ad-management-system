@@ -1,0 +1,41 @@
+
+name: Build and Push Backend to ECR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::789655958754:role/AdManagementGitHubActionsECRRole
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/ad-management-backend:latest
+            ${{ steps.login-ecr.outputs.registry }}/ad-management-backend:${{ github.sha }}
