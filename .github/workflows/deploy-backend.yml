@@ -1,4 +1,5 @@
-name: Build and Push Backend to ECR
+
+name: Build, Push and Deploy Backend
 
 on:
   push:
@@ -19,16 +20,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Debug OIDC claims
-        shell: bash
-        run: |
-          TOKEN=$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
-            | jq -r '.value')
 
-          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f2 | tr '_-' '/+' | awk '{ printf "%s", $0; l=length($0)%4; if(l) printf "%s", substr("====",1,4-l); print "" }' | base64 -d 2>/dev/null)
-          echo "$PAYLOAD" | jq '{iss, aud, sub}'
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,3 +39,78 @@ jobs:
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/ad-management-backend:latest
             ${{ steps.login-ecr.outputs.registry }}/ad-management-backend:${{ github.sha }}
+
+      - name: Deploy backend to EC2 using SSM
+        shell: bash
+        env:
+          AWS_REGION: ap-south-1
+          EC2_INSTANCE_ID: i-0fe260a11a8d7f362
+          ECR_REGISTRY: 789655958754.dkr.ecr.ap-south-1.amazonaws.com
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          PARAMETERS=$(jq -n \
+            --arg registry "$ECR_REGISTRY" \
+            --arg tag "$IMAGE_TAG" \
+            --arg region "$AWS_REGION" \
+            '{
+              commands: [
+                "set -e",
+                ("aws ecr get-login-password --region " + $region + " | docker login --username AWS --password-stdin " + $registry),
+                ("docker pull " + $registry + "/ad-management-backend:" + $tag),
+                "docker rm -f ad-management-api || true",
+                ("docker run -d --name ad-management-api --restart unless-stopped --env-file /home/ec2-user/backend.env -p 5000:5000 " + $registry + "/ad-management-backend:" + $tag),
+                "sleep 5",
+                "curl -fsS http://localhost:5000/api/health"
+              ]
+            }')
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy backend image $IMAGE_TAG" \
+            --parameters "$PARAMETERS" \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          for attempt in {1..36}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --query 'Status' \
+              --output text 2>/dev/null || true)
+
+            echo "Deployment status: ${STATUS:-Pending}"
+
+            case "$STATUS" in
+              Success)
+                echo "Backend deployment succeeded."
+                aws ssm get-command-invocation \
+                  --region "$AWS_REGION" \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --query 'StandardOutputContent' \
+                  --output text
+                exit 0
+                ;;
+              Failed|Cancelled|TimedOut)
+                aws ssm get-command-invocation \
+                  --region "$AWS_REGION" \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --query '[Status,StandardOutputContent,StandardErrorContent]' \
+                  --output json
+                exit 1
+                ;;
+            esac
+
+            sleep 5
+          done
+
+          echo "Timed out waiting for deployment. Check SSM Run Command in AWS Console."
+          exit 1
